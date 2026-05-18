@@ -4,9 +4,10 @@ import math
 import time
 
 class DfaVisualizer(ctk.CTkFrame):
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, app=None, **kwargs):
         super().__init__(master, **kwargs)
         self.configure(fg_color="transparent")
+        self.app = app
 
         # Configurations
         self.node_radius = 28
@@ -42,6 +43,16 @@ class DfaVisualizer(ctk.CTkFrame):
         self.input_entry = ctk.CTkEntry(self.control_frame, placeholder_text="e.g. x1_var", width=180)
         self.input_entry.pack(side="left", padx=5)
         self.input_entry.insert(0, "rakho_var")
+
+        self.btn_extract = ctk.CTkButton(
+            self.control_frame, 
+            text="🔄 Extract from Editor", 
+            width=150, 
+            fg_color="#3498db", 
+            hover_color="#2980b9", 
+            command=self.extract_lexeme_action
+        )
+        self.btn_extract.pack(side="left", padx=5)
         
         self.btn_step = ctk.CTkButton(self.control_frame, text="Step", width=70, command=self.step_dfa)
         self.btn_step.pack(side="left", padx=5)
@@ -102,17 +113,78 @@ class DfaVisualizer(ctk.CTkFrame):
         self.active_dfa = selection
         self.reset_simulation()
         
-        # Provide sample entries matching the selector
-        default_inputs = {
-            "Identifier": "rakho_var",
-            "Number (Int/Float)": "312.45",
-            "String Literal": "\"AuraLang\"",
-            "Comment": "# desi_comment"
-        }
+        lexeme = self.get_lexeme_from_code(selection)
         self.input_entry.delete(0, tk.END)
-        self.input_entry.insert(0, default_inputs[selection])
+        self.input_entry.insert(0, lexeme)
         
         self.draw_dfa_graph()
+
+    def get_lexeme_from_code(self, selection):
+        import re
+        from lexer.tokens import TokenType
+        
+        default_inputs = {
+            "Identifier": "x_var",
+            "Number (Int/Float)": "30",
+            "String Literal": '"AuraLang"',
+            "Comment": "# desi_comment"
+        }
+        
+        if not self.app or not hasattr(self.app, "code_editor"):
+            return default_inputs.get(selection)
+            
+        code = self.app.code_editor.editor.get("1.0", tk.END)
+        
+        try:
+            from lexer.lexer import Lexer
+            from semantic.error_manager import CompilerErrorManager
+            err_mgr = CompilerErrorManager()
+            lexer = Lexer(code, err_mgr)
+            tokens = lexer.tokenize()
+        except Exception:
+            tokens = []
+            
+        if selection == "Identifier":
+            idents = [t.value for t in tokens if t.type == TokenType.IDENT]
+            if idents:
+                return idents[0]
+            # Fallback regex
+            idents_re = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", code)
+            keywords = {"rakho", "bol", "agar", "warna", "ghumo", "jabtak", "tarkeeb", "wapas", "sahi", "galat", "and", "or", "not", "from", "to"}
+            idents_re = [x for x in idents_re if x not in keywords]
+            if idents_re:
+                return idents_re[0]
+                
+        elif selection == "Number (Int/Float)":
+            nums = [str(t.value) for t in tokens if t.type == TokenType.NUMBER]
+            if nums:
+                return nums[0]
+            nums_re = re.findall(r"\b\d+(?:\.\d+)?\b", code)
+            if nums_re:
+                return nums_re[0]
+                
+        elif selection == "String Literal":
+            strings = [f'"{t.value}"' for t in tokens if t.type == TokenType.STRING]
+            if strings:
+                return strings[0]
+            strings_re = re.findall(r'"[^"\n]*"', code)
+            if strings_re:
+                return strings_re[0]
+                
+        elif selection == "Comment":
+            comments_re = re.findall(r"(?:#|//).*$", code, re.MULTILINE)
+            if comments_re:
+                return comments_re[0].strip()
+                
+        return default_inputs.get(selection)
+
+    def extract_lexeme_action(self):
+        selection = self.dfa_selector.get()
+        lexeme = self.get_lexeme_from_code(selection)
+        self.input_entry.delete(0, tk.END)
+        self.input_entry.insert(0, lexeme)
+        self.reset_simulation()
+        self.log(f"Extracted '{lexeme}' from your current code editor for '{selection}' DFA.")
 
     def reset_simulation(self):
         self.current_state = "q0"

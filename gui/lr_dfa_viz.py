@@ -13,6 +13,10 @@ class LrDfaVisualizer(ctk.CTkFrame):
         self.active_parser_type = "SLR"
         self.node_radius = 26
         
+        # Zooming & Panning configurations
+        self.zoom_level = 1.0
+        self.last_draw_args = None
+        
         # Grid layout
         self.grid_columnconfigure(0, weight=6) # DFA Canvas panel
         self.grid_columnconfigure(1, weight=4) # Items and Merging details inspector
@@ -49,6 +53,16 @@ class LrDfaVisualizer(ctk.CTkFrame):
             text_color="#7f8c8d"
         )
         self.help_lbl.pack(side="right", padx=10)
+
+        # Zoom buttons in toolbar
+        self.btn_reset = ctk.CTkButton(self.toolbar, text="Reset View", width=80, height=26, font=ctk.CTkFont(size=11, weight="bold"), command=self.reset_zoom)
+        self.btn_reset.pack(side="right", padx=3)
+        
+        self.btn_zoom_out = ctk.CTkButton(self.toolbar, text="-", width=35, height=26, font=ctk.CTkFont(size=13, weight="bold"), command=self.zoom_out)
+        self.btn_zoom_out.pack(side="right", padx=3)
+        
+        self.btn_zoom_in = ctk.CTkButton(self.toolbar, text="+", width=35, height=26, font=ctk.CTkFont(size=13, weight="bold"), command=self.zoom_in)
+        self.btn_zoom_in.pack(side="right", padx=3)
         
         # Canvas Container with Scrollbars for massive DFAs
         self.canvas_frame = ctk.CTkFrame(self.left_panel, fg_color="#0d0d0f", corner_radius=10)
@@ -61,6 +75,11 @@ class LrDfaVisualizer(ctk.CTkFrame):
         self.v_scroll = ctk.CTkScrollbar(self.canvas_frame, orientation="vertical", command=self.canvas.yview)
         self.v_scroll.pack(side="right", fill="y")
         self.canvas.configure(yscrollcommand=self.v_scroll.set)
+        
+        # Panning & Zooming bindings
+        self.canvas.bind("<ButtonPress-1>", self.scroll_start)
+        self.canvas.bind("<B1-Motion>", self.scroll_move)
+        self.canvas.bind("<Control-MouseWheel>", self.wheel_zoom)
         
         # ----------------------------------------------------
         # RIGHT PANEL: Items & LALR Merge Log Inspector
@@ -148,6 +167,10 @@ class LrDfaVisualizer(ctk.CTkFrame):
         self.overlay.place_forget() # Ensure it's hidden when drawing
         self.canvas.delete("all")
         self.active_parser_type = parser_type
+        self.zoom_level = 1.0  # Reset zoom tracking for new drawing
+        
+        # Save last draw args for zoom resetting
+        self.last_draw_args = (parser_type, states, transitions, state_names, merge_logs)
         
         if not states:
             self.clear_views()
@@ -166,13 +189,16 @@ class LrDfaVisualizer(ctk.CTkFrame):
                 "No lookahead merges or propagations are required."
             )
             
-        # Calculate coordinates for each state
-        # Since we have many states, we arrange them in 4 columns grid:
+        # Dynamic coordinate spacing based on state count to make sure it looks incredibly clean
         cols = 4
-        spacing_x = 135
-        spacing_y = 120
-        start_x = 70
-        start_y = 65
+        if len(states) > 16:
+            cols = 5
+        
+        # Increased spacing to give states plenty of breathing room
+        spacing_x = 240
+        spacing_y = 190
+        start_x = 100
+        start_y = 100
         
         state_coords = {}
         for idx in range(len(states)):
@@ -180,16 +206,27 @@ class LrDfaVisualizer(ctk.CTkFrame):
             c = idx % cols
             
             # Simple alternating offsets to make diagonal transition arrows clearly readable
-            offset_y = 20 if c % 2 == 1 else 0
+            offset_y = 35 if c % 2 == 1 else 0
             
             x = start_x + c * spacing_x
             y = start_y + r * spacing_y + offset_y
             state_coords[idx] = (x, y)
             
-        # Set canvas scrolling region
+        # Set canvas scrolling region dynamically
         max_rows = math.ceil(len(states) / cols)
-        total_h = start_y + max_rows * spacing_y + 100
-        self.canvas.configure(scrollregion=(0, 0, 600, total_h))
+        total_w = start_x + cols * spacing_x + 100
+        total_h = start_y + max_rows * spacing_y + 150
+        self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
+        
+        # Determine which transitions are bidirectional
+        bidirectional = set()
+        transition_pairs = set()
+        for (src, sym), dest in transitions.items():
+            transition_pairs.add((src, dest))
+            
+        for (src, dest) in transition_pairs:
+            if src != dest and (dest, src) in transition_pairs:
+                bidirectional.add((src, dest))
         
         # 1. Draw Transition Arrows
         for (src, sym), dest in transitions.items():
@@ -198,17 +235,17 @@ class LrDfaVisualizer(ctk.CTkFrame):
             x1, y1 = state_coords[src]
             x2, y2 = state_coords[dest]
             
-            # Highlight color defaults
-            color = "#34495e"
-            width = 1.5
+            # Muted highlight default
+            color = "#424949"
+            width = 1.2
             
-            # If transition goes backwards, curve it slightly
             is_self_loop = (src == dest)
             
             if is_self_loop:
-                self.draw_self_loop(x1, y1, sym, "#7f8c8d", 1.5)
+                self.draw_self_loop(x1, y1, sym, "#7f8c8d", 1.5, src)
             else:
-                self.draw_transition_line(x1, y1, x2, y2, sym, color, width)
+                is_bi = (src, dest) in bidirectional
+                self.draw_transition_line(x1, y1, x2, y2, sym, color, width, src, dest, is_bi)
 
         # 2. Draw State Nodes
         for idx, state in enumerate(states):
@@ -245,41 +282,70 @@ class LrDfaVisualizer(ctk.CTkFrame):
         # Draw selected state automatically on first load
         self.select_state(self.selected_state_idx, states, state_names)
 
-    def draw_self_loop(self, x, y, label, color, width):
-        r = 15
+    def draw_self_loop(self, x, y, label, color, width, src_idx):
+        r = 16
         cx = x
         cy = y - self.node_radius - r + 3
+        
+        # Self-loop arc
         self.canvas.create_arc(
             cx - r, cy - r, cx + r, cy + r,
-            start=-30, extent=240, style="arc", outline=color, width=width
+            start=-30, extent=240, style="arc", outline=color, width=width,
+            tags=("transition_line", f"src_{src_idx}", f"dest_{src_idx}")
         )
-        # Text label above loop
+        
+        # Self-loop label
         self.canvas.create_text(
-            cx, cy - r - 8, text=label, fill="#bdc3c7", font=("Consolas", 9)
+            cx, cy - r - 8, text=label, fill="#bdc3c7", font=("Consolas", 10, "bold"),
+            tags=("transition_label", f"label_src_{src_idx}", f"label_dest_{src_idx}")
         )
 
-    def draw_transition_line(self, x1, y1, x2, y2, label, color, width):
-        angle = math.atan2(y2 - y1, x2 - x1)
+    def draw_transition_line(self, x1, y1, x2, y2, label, color, width, src, dest, is_bidirectional=False):
+        # Calculate midpoint
+        mx = (x1 + x2) / 2
+        my = (y1 + y2) / 2
         
-        # Offsets
-        start_x = x1 + self.node_radius * math.cos(angle)
-        start_y = y1 + self.node_radius * math.sin(angle)
+        # Control point for bezier curve
+        ctrl_x = mx
+        ctrl_y = my
         
-        end_x = x2 - self.node_radius * math.cos(angle)
-        end_y = y2 - self.node_radius * math.sin(angle)
+        if is_bidirectional:
+            # Perpendicular vector shift to curve bidirectional lines in opposite directions
+            dx = x2 - x1
+            dy = y2 - y1
+            L = math.hypot(dx, dy)
+            if L > 0:
+                nx = -dy / L
+                ny = dx / L
+                offset = 35  # curve height
+                ctrl_x = mx + nx * offset
+                ctrl_y = my + ny * offset
+                
+        # Calculate start and end offsets at circle boundaries
+        angle_start = math.atan2(ctrl_y - y1, ctrl_x - x1)
+        start_x = x1 + self.node_radius * math.cos(angle_start)
+        start_y = y1 + self.node_radius * math.sin(angle_start)
         
+        angle_end = math.atan2(y2 - ctrl_y, x2 - ctrl_x)
+        end_x = x2 - self.node_radius * math.cos(angle_end)
+        end_y = y2 - self.node_radius * math.sin(angle_end)
+        
+        # Draw smooth bezier curve
         self.canvas.create_line(
-            start_x, start_y, end_x, end_y,
-            fill=color, width=width, arrow="last", arrowshape=(8, 10, 3)
+            start_x, start_y, ctrl_x, ctrl_y, end_x, end_y,
+            smooth=True, fill=color, width=width, arrow="last", arrowshape=(10, 12, 4),
+            tags=("transition_line", f"src_{src}", f"dest_{dest}")
         )
         
-        # Label offset
-        mid_x = (start_x + end_x) / 2
-        mid_y = (start_y + end_y) / 2
-        offset_y = -8 if angle == 0 or abs(angle) < 0.2 else 8
-        
+        # Draw label at control point with vertical offset
+        angle = math.atan2(y2 - y1, x2 - x1)
+        offset_y = -10 if angle == 0 or abs(angle) < 0.2 else 10
+        if is_bidirectional:
+            offset_y = -14 if angle == 0 or abs(angle) < 0.2 else 14
+            
         self.canvas.create_text(
-            mid_x, mid_y + offset_y, text=label, fill="#7f8c8d", font=("Consolas", 9, "bold")
+            ctrl_x, ctrl_y + offset_y, text=label, fill="#7f8c8d", font=("Consolas", 10, "bold"),
+            tags=("transition_label", f"label_src_{src}", f"label_dest_{dest}")
         )
 
     def select_state(self, idx: int, states: list, state_names: list = None):
@@ -297,6 +363,32 @@ class LrDfaVisualizer(ctk.CTkFrame):
             if self.canvas.type(st) == "oval":
                 self.canvas.itemconfig(st, outline="#e67e22", width=3.5, fill="#2c3e50")
                 
+        # Highlight transitions dynamically: Reset all first
+        for line in self.canvas.find_withtag("transition_line"):
+            self.canvas.itemconfig(line, fill="#424949", width=1.2)
+            
+        for label in self.canvas.find_withtag("transition_label"):
+            self.canvas.itemconfig(label, fill="#7f8c8d")
+            
+        # Highlight outgoing transitions (Cyan)
+        for line in self.canvas.find_withtag(f"src_{idx}"):
+            self.canvas.itemconfig(line, fill="#5dade2", width=2.2)
+            
+        for lbl in self.canvas.find_withtag(f"label_src_{idx}"):
+            self.canvas.itemconfig(lbl, fill="#5dade2")
+            
+        # Highlight incoming transitions (Deep blue)
+        for line in self.canvas.find_withtag(f"dest_{idx}"):
+            # If not already highlighted as outgoing (self loop), highlight as incoming
+            tags = self.canvas.gettags(line)
+            if f"src_{idx}" not in tags:
+                self.canvas.itemconfig(line, fill="#3498db", width=2.0)
+            
+        for lbl in self.canvas.find_withtag(f"label_dest_{idx}"):
+            tags = self.canvas.gettags(lbl)
+            if f"label_src_{idx}" not in tags:
+                self.canvas.itemconfig(lbl, fill="#3498db")
+
         # Populate Items textbox
         state = states[idx]
         name = state_names[idx] if state_names else f"I{idx}"
@@ -350,3 +442,38 @@ class LrDfaVisualizer(ctk.CTkFrame):
     def show_overlay(self):
         """Covers visualizer with descriptive overlay warning if in LL(1) mode."""
         self.overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+    # ----------------------------------------------------
+    # PANNING & ZOOMING EVENT HANDLERS
+    # ----------------------------------------------------
+    def scroll_start(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+
+    def scroll_move(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def wheel_zoom(self, event):
+        scale = 1.15 if event.delta > 0 else 0.85
+        self.apply_zoom(scale, event.x, event.y)
+
+    def apply_zoom(self, scale, x=None, y=None):
+        if x is None: x = self.canvas.winfo_width() / 2
+        if y is None: y = self.canvas.winfo_height() / 2
+        
+        # Keep zoom level within reasonable boundaries (e.g. 0.3x to 3.0x)
+        new_zoom = self.zoom_level * scale
+        if 0.3 <= new_zoom <= 3.0:
+            self.zoom_level = new_zoom
+            self.canvas.scale("all", x, y, scale, scale)
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def zoom_in(self):
+        self.apply_zoom(1.15)
+
+    def zoom_out(self):
+        self.apply_zoom(0.85)
+
+    def reset_zoom(self):
+        self.zoom_level = 1.0
+        if self.last_draw_args:
+            self.draw_dfa(*self.last_draw_args)

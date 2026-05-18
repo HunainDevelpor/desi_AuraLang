@@ -68,6 +68,8 @@ class SemanticAnalyzer:
     # ====================================================
 
     def analyze(self, program: ProgramNode) -> bool:
+        self.global_env = Environment("Global")
+        self.current_env = self.global_env
         self.symbols_list = []
         self.trace = []
         self.errors = []

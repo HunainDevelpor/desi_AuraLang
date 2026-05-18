@@ -95,6 +95,16 @@ class Lexer:
                 self.comments.append(comment_text)
                 continue
 
+            # comment: // ... end of line
+            if ch == "/" and self._peek_next() == "/":
+                self._advance() # consume first '/'
+                self._advance() # consume second '/'
+                comment_text = ""
+                while self._peek() not in ("\n", "\0"):
+                    comment_text += self._advance()
+                self.comments.append(comment_text)
+                continue
+
             break
 
     # ---------- token scanners ----------

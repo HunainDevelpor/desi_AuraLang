@@ -325,7 +325,7 @@ class CompilerApp(ctk.CTk):
 
         # 6. Interactive DFA Tab
         self.tabs["dfa"] = ctk.CTkFrame(self.main_content, fg_color="transparent")
-        self.dfa_viz = DfaVisualizer(self.tabs["dfa"])
+        self.dfa_viz = DfaVisualizer(self.tabs["dfa"], self)
         self.dfa_viz.pack(fill="both", expand=True, padx=15, pady=15)
         
         # 7. CFG Grammar sets Tab
