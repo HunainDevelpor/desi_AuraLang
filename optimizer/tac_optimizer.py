@@ -28,7 +28,15 @@ class TACOptimizer:
             current, pass_changed = self.pass_folding_and_simplification(current)
             if pass_changed: changed = True
             
-            # 3. Dead Code Elimination
+            # 3. Common Subexpression Elimination (CSE)
+            current, pass_changed = self.pass_cse(current)
+            if pass_changed: changed = True
+            
+            # 4. Dead Store Elimination (DSE)
+            current, pass_changed = self.pass_dse(current)
+            if pass_changed: changed = True
+            
+            # 5. Dead Code Elimination (DCE)
             current, pass_changed = self.pass_dead_code_elimination(current)
             if pass_changed: changed = True
             
@@ -199,10 +207,10 @@ class TACOptimizer:
             result = q.result
             op = q.op
             
-            # We can safely eliminate dead assignments to temporary variables (e.g. t0, t1)
+            # We can safely eliminate dead assignments to any variable (temporaries or user variables)
             # if they are never used as arguments in subsequent statements.
-            if op == "=" and result.startswith("t") and result not in usage:
-                self.log(f"Eliminated dead code assignment to unused temporary: '{result} = {q.arg1}'")
+            if op == "=" and result and result not in usage:
+                self.log(f"Eliminated dead code assignment to unused variable: '{result} = {q.arg1}'")
                 changed = True
                 continue # Skip adding this statement (eliminates it!)
                 
@@ -269,3 +277,108 @@ class TACOptimizer:
                 else:
                     tac.append(f"{q.result} = {op} {q.arg1}")
         return tac
+
+    # ====================================================
+    # PASS 4: COMMON SUBEXPRESSION ELIMINATION (CSE)
+    # ====================================================
+
+    def pass_cse(self, quadruples: List[Quadruple]) -> Tuple[List[Quadruple], bool]:
+        changed = False
+        optimized: List[Quadruple] = []
+        
+        # Maps expression tuple (op, arg1, arg2) -> temporary variable name holding its result
+        expr_map: Dict[Tuple[str, str, str], str] = {}
+        
+        for q in quadruples:
+            if q.op in ("LABEL", "GOTO", "IF_FALSE", "CALL", "LABEL_FUNC", "RETURN"):
+                # Clear map on control flow boundaries to be safe
+                expr_map.clear()
+                optimized.append(q)
+                continue
+                
+            # If any argument has been redefined, invalidate expressions containing it!
+            if q.op == "=":
+                to_del = [expr for expr in expr_map if expr[1] == q.result or expr[2] == q.result]
+                for expr in to_del:
+                    del expr_map[expr]
+                optimized.append(q)
+                continue
+                
+            # Check if this is a binary expression
+            if q.op in ("+", "-", "*", "/", "%", "==", "!=", ">", "<", ">=", "<="):
+                expr_key = (q.op, q.arg1, q.arg2)
+                if expr_key in expr_map:
+                    prev_temp = expr_map[expr_key]
+                    self.log(f"Eliminated common subexpression: '{q.result} = {q.arg1} {q.op} {q.arg2}' replaced with copy: '{q.result} = {prev_temp}'")
+                    optimized.append(Quadruple("=", prev_temp, "", q.result))
+                    changed = True
+                else:
+                    expr_map[expr_key] = q.result
+                    optimized.append(q)
+            else:
+                optimized.append(q)
+                
+        return optimized, changed
+
+    # ====================================================
+    # PASS 5: DEAD STORE ELIMINATION (DSE)
+    # ====================================================
+
+    def pass_dse(self, quadruples: List[Quadruple]) -> Tuple[List[Quadruple], bool]:
+        changed = False
+        optimized: List[Quadruple] = []
+        
+        # Partition into basic blocks for 100% safe within-block DSE optimization
+        blocks: List[List[Quadruple]] = []
+        current_block: List[Quadruple] = []
+        
+        for q in quadruples:
+            if q.op in ("LABEL", "GOTO", "IF_FALSE", "LABEL_FUNC", "CALL", "RETURN"):
+                if current_block:
+                    blocks.append(current_block)
+                    current_block = []
+                blocks.append([q])
+            else:
+                current_block.append(q)
+        if current_block:
+            blocks.append(current_block)
+            
+        for block in blocks:
+            if len(block) <= 1:
+                optimized.extend(block)
+                continue
+                
+            block_opt: List[Quadruple] = []
+            block_len = len(block)
+            dead_indices = set()
+            
+            for i in range(block_len):
+                q = block[i]
+                if q.op == "=" and q.result and not q.result.startswith("func_"):
+                    is_read_before_reassign = False
+                    has_reassign = False
+                    reassign_idx = -1
+                    
+                    for j in range(i + 1, block_len):
+                        sub_q = block[j]
+                        # Check if variable is read
+                        if sub_q.arg1 == q.result or sub_q.arg2 == q.result or (sub_q.op in ("PRINT", "PUSH", "RETURN") and sub_q.arg1 == q.result):
+                            is_read_before_reassign = True
+                            break
+                        # Check if variable is overwritten
+                        if sub_q.result == q.result and sub_q.op not in ("ARRAY_SET",):
+                            has_reassign = True
+                            reassign_idx = j
+                            break
+                            
+                    if has_reassign and not is_read_before_reassign:
+                        self.log(f"Eliminated dead store to '{q.result}' (overwritten at statement index {reassign_idx} without being read)")
+                        dead_indices.add(i)
+                        changed = True
+                        
+            for i in range(block_len):
+                if i not in dead_indices:
+                    block_opt.append(block[i])
+            optimized.extend(block_opt)
+            
+        return optimized, changed

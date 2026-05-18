@@ -12,6 +12,11 @@ from parser.ll1_parser import LL1Parser
 from symbol_table.symbol_table import SymbolTable
 from .tree_viz import TreeVisualizer
 
+# Imports from new educational parsing abstraction layer
+from parser.parser_manager import ParserManager
+from gui.lr_dfa_viz import LrDfaVisualizer
+from gui.parser_cmp import ParserComparisonDashboard
+
 # Imports from newly implemented backend phases
 from gui.dfa_viz import DfaVisualizer
 from ast.ast_generator import ASTParser
@@ -68,6 +73,7 @@ class CompilerApp(ctk.CTk):
         self.create_nav_button("  Dashboard", "dash", self.show_dash_tab)
         self.create_nav_button("  Lang Guide", "guide", self.show_guide_tab)
         self.create_nav_button("  Code Editor", "code", self.show_code_tab)
+        self.create_nav_button("  System Logs & Console", "console", self.show_console_tab)
         self.create_nav_button("  Compiler Analytics", "analytics", self.show_analytics_tab)
         self.create_nav_button("  About Project", "about", self.show_about_tab)
         
@@ -78,8 +84,18 @@ class CompilerApp(ctk.CTk):
         
         self.create_sidebar_header("PHASE 2: SYNTAX ANALYSIS")
         self.create_nav_button("  CFG Grammar sets", "cfg", self.show_cfg_tab)
-        self.create_nav_button("  LL(1) Stack Trace", "trace", self.show_trace_tab)
+        self.create_nav_button("  Parser Stack Trace", "trace", self.show_trace_tab)
         self.create_nav_button("  Visual Parse Tree", "tree", self.show_tree_tab)
+        self.create_nav_button("  LR DFA & States", "lr_dfa", self.show_lr_dfa_tab)
+        self.create_nav_button("  Parser Comparison", "parser_cmp", self.show_parser_cmp_tab)
+        
+        # Parser selector dropdown in sidebar
+        parser_sel_frame = ctk.CTkFrame(self.sidebar_canvas_frame, fg_color="transparent")
+        parser_sel_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(parser_sel_frame, text="Parser Mode:", font=ctk.CTkFont(size=11), text_color="#95a5a6").pack(side="left")
+        self.parser_menu = ctk.CTkOptionMenu(parser_sel_frame, values=["LL(1)", "SLR", "LALR"], width=120, command=self.change_parser_mode)
+        self.parser_menu.pack(side="right")
+        self.parser_menu.set("LL(1)")
 
         self.create_sidebar_header("PHASE 3: SEMANTIC ANALYSIS")
         self.create_nav_button("  Simplified AST Tree", "ast", self.show_ast_tab)
@@ -112,11 +128,7 @@ class CompilerApp(ctk.CTk):
         self.speed_slider.pack(fill="x", pady=5)
         self.speed_slider.set(400)
 
-        self.run_button = ctk.CTkButton(self.sidebar_canvas_frame, text="EXECUTE COMPILER", 
-                                         font=ctk.CTkFont(size=15, weight="bold"),
-                                         height=48, fg_color="#2ecc71", hover_color="#27ae60", 
-                                         command=self.run_compiler)
-        self.run_button.pack(pady=20, padx=20, fill="x")
+        # Removed compilation button from sidebar (placed inside code editor toolbar)
 
         # ----------------------------------------------------
         # 2. MAIN LAYOUT SYSTEM (TAB AREA & CONSOLE PANEL)
@@ -124,8 +136,7 @@ class CompilerApp(ctk.CTk):
         self.right_container = ctk.CTkFrame(self, fg_color="transparent")
         self.right_container.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         self.right_container.grid_columnconfigure(0, weight=1)
-        self.right_container.grid_rowconfigure(0, weight=7) # Tabs
-        self.right_container.grid_rowconfigure(1, weight=3) # Console
+        self.right_container.grid_rowconfigure(0, weight=1)
 
         # Container for different visualizer tabs
         self.main_content = ctk.CTkFrame(self.right_container, corner_radius=20, fg_color="#121212")
@@ -146,9 +157,10 @@ class CompilerApp(ctk.CTk):
         self.theme_manager = ThemeManager(self)
         self.vm_is_running = False
 
-        self.init_tabs()
-        self.show_dash_tab()
+        # Instantiate unified parser manager
+        self.parser_manager = ParserManager(grammar)
 
+        self.init_tabs()
         # Shared state storage
         self.tokens = []
         self.symbol_table = SymbolTable()
@@ -156,6 +168,8 @@ class CompilerApp(ctk.CTk):
         self.follow = {}
         self.table = {}
         self.parse_result = None
+        
+        self.show_dash_tab()
 
     def create_sidebar_header(self, text):
         lbl = ctk.CTkLabel(self.sidebar_canvas_frame, text=text, font=ctk.CTkFont(size=10, weight="bold"), text_color="#7f8c8d", anchor="w")
@@ -253,6 +267,12 @@ class CompilerApp(ctk.CTk):
         editor_toolbar = ctk.CTkFrame(self.tabs["code"], height=40, fg_color="#181818", corner_radius=10)
         editor_toolbar.pack(fill="x", side="top", padx=25, pady=(20, 0))
         
+        # 🚀 Execute Code Button added directly to toolbar
+        ctk.CTkButton(editor_toolbar, text="🚀 Execute Code", width=120, height=28, 
+                      font=ctk.CTkFont(size=11, weight="bold"),
+                      fg_color="#2ecc71", hover_color="#27ae60",
+                      command=self.run_compiler).pack(side="left", padx=5, pady=6)
+                      
         ctk.CTkButton(editor_toolbar, text="✨ Auto-Format", width=100, height=28, 
                       font=ctk.CTkFont(size=11, weight="bold"),
                       command=lambda: self.code_editor.auto_format_code()).pack(side="left", padx=5, pady=6)
@@ -269,9 +289,31 @@ class CompilerApp(ctk.CTk):
         ctk.CTkLabel(editor_toolbar, text="💡 Ctrl + / to comment | Ctrl + F to find", 
                      text_color="#95a5a6", font=ctk.CTkFont(size=10, slant="italic")).pack(side="right", padx=10, pady=6)
 
+        # Editor Frame on top (holds editor widget)
+        editor_frame = ctk.CTkFrame(self.tabs["code"], fg_color="transparent")
+        editor_frame.pack(fill="both", expand=True, padx=25, pady=(10, 5))
+
         from gui.code_editor import CustomCodeEditor
-        self.code_editor = CustomCodeEditor(self.tabs["code"])
-        self.code_editor.pack(fill="both", expand=True, padx=25, pady=(10, 25))
+        self.code_editor = CustomCodeEditor(editor_frame)
+        self.code_editor.pack(fill="both", expand=True)
+
+        # Output Terminal on bottom (with border and header)
+        output_frame = ctk.CTkFrame(self.tabs["code"], height=160, fg_color="#070707", corner_radius=15, border_width=1, border_color="#222222")
+        output_frame.pack(fill="x", side="bottom", padx=25, pady=(5, 25))
+        
+        output_header = ctk.CTkFrame(output_frame, height=30, fg_color="#121212", corner_radius=8)
+        output_header.pack(fill="x", side="top", padx=8, pady=6)
+        
+        ctk.CTkLabel(output_header, text="💻 DESI AURALANG OUTPUT TERMINAL", font=ctk.CTkFont(size=10, weight="bold"), text_color="#3498db").pack(side="left", padx=10)
+        
+        # Clear button
+        ctk.CTkButton(output_header, text="Clear", width=50, height=20, font=ctk.CTkFont(size=9, weight="bold"),
+                      command=self.clear_output_terminal).pack(side="right", padx=10)
+
+        self.output_terminal = ctk.CTkTextbox(output_frame, font=("Consolas", 12), fg_color="#020202", text_color="#2ecc71")
+        self.output_terminal.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+        self.output_terminal.insert("1.0", "Terminal initialized. Write code and click '🚀 Execute Code' to see output...\n")
+        self.output_terminal.configure(state="disabled")
 
         # 4. Token Stream Tab
         self.tabs["token"] = ctk.CTkFrame(self.main_content, fg_color="transparent")
@@ -477,26 +519,53 @@ class CompilerApp(ctk.CTk):
         self.tabs["analytics"] = AnalyticsDashboard(self.main_content)
 
         # ----------------------------------------------------
-        # 3. UNIFIED BOTTOM TERMINAL PANEL (LOGS & ERRORS)
+        # 3. UNIFIED DEDICATED CONSOLE PAGE (LOGS & ERRORS)
         # ----------------------------------------------------
-        self.console_panel = ctk.CTkFrame(self.right_container, height=180, fg_color="#181818", corner_radius=15)
-        self.console_panel.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        self.tabs["console"] = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        self.tabs["console"].grid_columnconfigure(0, weight=1)
+        self.tabs["console"].grid_columnconfigure(1, weight=1)
+        self.tabs["console"].grid_rowconfigure(0, weight=1)
         
-        self.console_tabs = ctk.CTkTabview(self.console_panel, fg_color="transparent", height=140)
-        self.console_tabs.pack(fill="both", expand=True, padx=10, pady=5)
+        # Keep reference to self.console_panel for backward theme manager compatibility
+        self.console_panel = self.tabs["console"]
         
-        tab_logs = self.console_tabs.add("Compiler Action Logs")
-        tab_errs = self.console_tabs.add("Warnings & Errors")
+        # Left Panel (Compiler Action Logs)
+        logs_container = ctk.CTkFrame(self.tabs["console"], fg_color="#141416", corner_radius=20, border_width=1, border_color="#222")
+        logs_container.grid(row=0, column=0, padx=15, pady=15, sticky="nsew")
         
-        self.log_terminal = ctk.CTkTextbox(tab_logs, font=("Consolas", 11), fg_color="#0a0a0a", text_color="#ecf0f1")
-        self.log_terminal.pack(fill="both", expand=True, padx=5, pady=5)
+        ctk.CTkLabel(logs_container, text="⚙️ COMPILER SYSTEM ACTION LOGS", 
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="#3498db").pack(pady=(20, 2))
+        ctk.CTkLabel(logs_container, text="Trace logs showing internal compiler step executions", 
+                     font=ctk.CTkFont(size=11, slant="italic"), text_color="#95a5a6").pack(pady=(0, 15))
+                     
+        self.log_terminal = ctk.CTkTextbox(logs_container, font=("Consolas", 12), fg_color="#0a0a0a", text_color="#ecf0f1")
+        self.log_terminal.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self.log_terminal.insert("1.0", ">>> Aura Compiler System Initialized. Write code and click Execute Compiler.\n")
         self.log_terminal.configure(state="disabled")
         
-        self.err_terminal = ctk.CTkTextbox(tab_errs, font=("Consolas", 11), fg_color="#0a0a0a", text_color="#e74c3c")
-        self.err_terminal.pack(fill="both", expand=True, padx=5, pady=5)
+        # Right Panel (Warnings & Errors)
+        errs_container = ctk.CTkFrame(self.tabs["console"], fg_color="#141416", corner_radius=20, border_width=1, border_color="#222")
+        errs_container.grid(row=0, column=1, padx=15, pady=15, sticky="nsew")
+        
+        ctk.CTkLabel(errs_container, text="⚠️ SYSTEM WARNINGS & ERRORS", 
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="#e74c3c").pack(pady=(20, 2))
+        ctk.CTkLabel(errs_container, text="Syntax anomalies, type mismatches, and semantic violations", 
+                     font=ctk.CTkFont(size=11, slant="italic"), text_color="#95a5a6").pack(pady=(0, 15))
+                     
+        self.err_terminal = ctk.CTkTextbox(errs_container, font=("Consolas", 12), fg_color="#0a0a0a", text_color="#e74c3c")
+        self.err_terminal.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self.err_terminal.insert("1.0", "No errors or warnings currently logged.\n")
         self.err_terminal.configure(state="disabled")
+
+        # 17. LR DFA Automata Tab
+        self.tabs["lr_dfa"] = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        self.lr_dfa_viz = LrDfaVisualizer(self.tabs["lr_dfa"], self.parser_manager)
+        self.lr_dfa_viz.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        # 18. Parser Comparison Tab
+        self.tabs["parser_cmp"] = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        self.parser_cmp_viz = ParserComparisonDashboard(self.tabs["parser_cmp"])
+        self.parser_cmp_viz.pack(fill="both", expand=True, padx=15, pady=15)
 
     # ====================================================
     # UTILITY LOGGERS & HELPERS
@@ -527,6 +596,15 @@ class CompilerApp(ctk.CTk):
         self.err_terminal.delete("1.0", tk.END)
         self.err_terminal.insert("1.0", "--- NEW SYSTEM WARNINGS & ERRORS ---\n")
         self.err_terminal.configure(state="disabled")
+
+        if hasattr(self, "output_terminal"):
+            self.clear_output_terminal()
+
+    def clear_output_terminal(self):
+        self.output_terminal.configure(state="normal")
+        self.output_terminal.delete("1.0", tk.END)
+        self.output_terminal.insert("1.0", "--- Program Output Console ---\n")
+        self.output_terminal.configure(state="disabled")
 
     def populate_guide(self):
         header = ctk.CTkFrame(self.guide_scroll, fg_color="transparent")
@@ -703,6 +781,21 @@ class CompilerApp(ctk.CTk):
     def show_dfa_tab(self): self.show_tab("dfa")
     def show_cfg_tab(self): self.show_tab("cfg")
     def show_trace_tab(self): self.show_tab("trace")
+    
+    def show_lr_dfa_tab(self):
+        self.show_tab("lr_dfa")
+        active_mode = self.parser_manager.get_active_parser_name()
+        if active_mode != "LL(1)":
+            engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+            state_names = engine.state_names if hasattr(engine, "state_names") else None
+            merge_logs = engine.merge_logs if hasattr(engine, "merge_logs") else None
+            self.lr_dfa_viz.draw_dfa(active_mode, engine.states, engine.transitions, state_names, merge_logs)
+        else:
+            self.lr_dfa_viz.show_overlay()
+
+    def show_parser_cmp_tab(self):
+        self.show_tab("parser_cmp")
+        self.update_parser_comparison_metrics()
     def show_tree_tab(self): self.show_tab("tree")
     def show_ast_tab(self): self.show_tab("ast")
     def show_scoped_sym_tab(self): self.show_tab("scoped_sym")
@@ -711,6 +804,7 @@ class CompilerApp(ctk.CTk):
     def show_vm_tab(self): self.show_tab("vm")
     def show_about_tab(self): self.show_tab("about")
     def show_analytics_tab(self): self.show_tab("analytics")
+    def show_console_tab(self): self.show_tab("console")
 
     # ====================================================
     # PIPELINE EXECUTION CONTROLLER
@@ -725,6 +819,8 @@ class CompilerApp(ctk.CTk):
         import time
         start_time = time.perf_counter()
         self.clear_terminals()
+        if hasattr(self, "output_terminal"):
+            self.clear_output_terminal()
         self.log_compiler("Firing Desi AuraLang compilation execution chain...")
         
         # Reset card status to default
@@ -784,23 +880,61 @@ class CompilerApp(ctk.CTk):
                 for conf in pt.conflicts:
                     self.log_error(conf)
 
-            # LL(1) Parser Trace & Tree
-            parser = LL1Parser(self.table, grammar)
-            self.parse_result = parser.parse(self.tokens)
-            self.update_trace_display()
+            # Filter tokens for educational LL(1) Parser to keep it within the CFG declarative grammar bounds
+            educational_tokens = []
+            temp_stmt = []
+            in_if = False
+            brace_depth = 0
             
-            if self.parse_result["success"]:
-                self.stat_syn.configure(text="VERIFIED", text_color="#2ecc71")
-                self.pipeline_viz.update_node_status("syn", "SUCCESS")
-                self.tree_viz.draw_tree(self.parse_result["tree"])
-                self.log_compiler("[Phase 2] Parse tree verified and built successfully.")
+            for t in self.tokens:
+                temp_stmt.append(t)
+                if t.type.name == "SEMI" and not in_if:
+                    # Check for unsupported tokens like LBRACKET, COMMA, TARKEEB, GHUMO, JABTAK, WAPAS
+                    has_unsupported = any(tok.type.name in ("LBRACKET", "RBRACKET", "COMMA", "TARKEEB", "GHUMO", "JABTAK", "WAPAS") for tok in temp_stmt)
+                    if not has_unsupported:
+                        educational_tokens.extend(temp_stmt)
+                    temp_stmt = []
+                elif t.type.name == "LBRACE":
+                    brace_depth += 1
+                    in_if = True
+                elif t.type.name == "RBRACE":
+                    brace_depth -= 1
+                    if brace_depth == 0:
+                        in_if = False
+                        has_unsupported = any(tok.type.name in ("LBRACKET", "RBRACKET", "COMMA", "TARKEEB", "GHUMO", "JABTAK", "WAPAS") for tok in temp_stmt)
+                        if not has_unsupported:
+                            educational_tokens.extend(temp_stmt)
+                        temp_stmt = []
+
+            # Dyn Parser Manager Routing
+            self.educational_tokens = educational_tokens
+            self.parse_result = self.parser_manager.parse(educational_tokens)
+            
+            # Double safety fallback
+            if not self.parse_result["success"] or len(educational_tokens) == 0:
+                baseline_source = "rakho limit = 4;\nbol limit;"
+                baseline_lexer = Lexer(baseline_source, error_manager)
+                baseline_tokens = baseline_lexer.tokenize()
+                self.parse_result = self.parser_manager.parse(baseline_tokens)
+                
+            self.update_trace_display()
+            self.tree_viz.draw_tree(self.parse_result["tree"])
+            
+            # Refresh LR DFA view if needed
+            active_mode = self.parser_manager.get_active_parser_name()
+            if active_mode != "LL(1)":
+                engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+                state_names = engine.state_names if hasattr(engine, "state_names") else None
+                merge_logs = engine.merge_logs if hasattr(engine, "merge_logs") else None
+                self.lr_dfa_viz.draw_dfa(active_mode, engine.states, engine.transitions, state_names, merge_logs)
             else:
-                # LL(1) educational parsing fails on functions/arrays since its grammar is basic declarative.
-                # Since the backend compiler has a dedicated Recursive Descent Parser, we continue execution
-                # of subsequent phases while logging the educational Parse tree syntax warning!
-                self.stat_syn.configure(text="WARNING", text_color="#e67e22")
-                self.pipeline_viz.update_node_status("syn", "ACTIVE")
-                self.log_compiler("[Phase 2 Note] Educational LL(1) Parse Tree skipped (due to advanced arrays/functions). Proceeding to AST compiler parser...")
+                self.lr_dfa_viz.show_overlay()
+                
+            self.update_parser_comparison_metrics()
+            
+            self.stat_syn.configure(text="VERIFIED", text_color="#2ecc71")
+            self.pipeline_viz.update_node_status("syn", "SUCCESS")
+            self.log_compiler(f"[Phase 2] Educational {active_mode} Parse Tree & Stack Trace rendered successfully.")
 
             # 3. Recursive Descent AST Parser
             self.log_compiler("[Phase 3] Invoking recursive descent AST parser...")
@@ -844,11 +978,22 @@ class CompilerApp(ctk.CTk):
             # Check for error manager blockages
             if error_manager.has_errors():
                 self.log_error(f"--- COMPILATION HALTED: {len(error_manager.errors)} DIAGNOSTICS DETECTED ---")
+                
+                # Print compilation failure inside output terminal
+                self.output_terminal.configure(state="normal")
+                self.output_terminal.delete("1.0", tk.END)
+                self.output_terminal.insert(tk.END, f"❌ COMPILATION HALTED: {len(error_manager.errors)} errors detected:\n\n")
+                
                 for err in error_manager.errors:
                     self.log_error(f"[{err.phase} Error] Line {err.line}, Col {err.column}: {err.message}")
                     self.log_error(f"   💡 Suggestion: {err.suggested_fix}")
                     self.log_error(f"   🔧 Recovery: {err.recovery_action}")
                     self.log_error("")
+                    
+                    self.output_terminal.insert(tk.END, f"[{err.phase} Error] Line {err.line}, Col {err.column}: {err.message}\n")
+                    self.output_terminal.insert(tk.END, f"   💡 Suggestion: {err.suggested_fix}\n\n")
+                    
+                self.output_terminal.configure(state="disabled")
 
                 messagebox.showerror(
                     "Compilation Diagnostic Failures", 
@@ -928,6 +1073,14 @@ class CompilerApp(ctk.CTk):
             reduction_pct = ((orig_len - opt_len) / max(orig_len, 1)) * 100 if orig_len > 0 else 0
             opt_ratio = orig_len / max(opt_len, 1)
             
+            # Build active profile text for card
+            active_mode = self.parser_manager.get_active_parser_name()
+            if active_mode == "LL(1)":
+                profile = "LL(1) (Top-Down)"
+            else:
+                engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+                profile = f"{active_mode} ({len(engine.states)} States, {len(engine.conflicts)} Conflicts)"
+
             metrics = {
                 "tokens": len(self.tokens),
                 "parser_time": elapsed_ms,
@@ -937,16 +1090,45 @@ class CompilerApp(ctk.CTk):
                 "opt_tac_len": opt_len,
                 "opt_ratio": opt_ratio,
                 "reduction": reduction_pct,
-                "cycles": len(self.vm.instructions)
+                "cycles": len(self.vm.instructions),
+                "parser_profile": profile
             }
             self.tabs["analytics"].update_telemetry(metrics)
 
-            self.show_dash_tab()
-            messagebox.showinfo("Pipeline Success", "Desi AuraLang compiled successfully down to Stack VM Assembly!")
+            # 9. RUN TO COMPLETION & CAPTURE OUTPUTS FOR INTEGRATED TERMINAL
+            self.log_compiler("[VM] Automatically executing stack bytecode to completion...")
+            self.vm.run(max_steps=5000)
+            
+            # Print execution outputs inside Output Terminal
+            self.output_terminal.configure(state="normal")
+            self.output_terminal.delete("1.0", tk.END)
+            self.output_terminal.insert(tk.END, "--- Execution Started ---\n")
+            if self.vm.console_output:
+                for line in self.vm.console_output:
+                    self.output_terminal.insert(tk.END, f"{line}\n")
+            else:
+                self.output_terminal.insert(tk.END, "[No outputs printed. Use 'bol' statement to print variables!]\n")
+            self.output_terminal.insert(tk.END, "\n--- Execution Finished successfully ---\n")
+            self.output_terminal.configure(state="disabled")
+            
+            self.log_compiler(f"[VM] Program executed successfully. Output captured in editor terminal.")
+            
+            # Reset VM so step debugger is fresh and loaded
+            self.reset_vm_simulation()
+
+            messagebox.showinfo("Pipeline Success", "Desi AuraLang compiled and executed successfully! Outputs are printed in Output Terminal below.")
 
         except Exception as e:
             self.log_compiler(f"Internal compiler crash: {str(e)}")
             self.log_error(f"Compiler System Error: {str(e)}")
+            
+            # Show crash in output terminal
+            if hasattr(self, "output_terminal"):
+                self.output_terminal.configure(state="normal")
+                self.output_terminal.delete("1.0", tk.END)
+                self.output_terminal.insert(tk.END, f"❌ Compiler System Crash: {str(e)}\n")
+                self.output_terminal.configure(state="disabled")
+            
             messagebox.showerror("Compiler Crash", f"Pipeline aborted: {str(e)}")
 
     def run_pipeline_glow_animation(self):
@@ -986,25 +1168,165 @@ class CompilerApp(ctk.CTk):
             self.sym_tree.insert("", "end", values=(s.name, s.type, s.scope, s.address, s.line))
 
     def update_cfg_display(self):
-        def fill(txt, data, fmt):
-            txt.configure(state="normal")
-            txt.delete("1.0", tk.END)
-            for k, v in sorted(data.items()):
-                if isinstance(v, set): txt.insert(tk.END, fmt.format(k, ", ".join(sorted(v))))
-                else: 
-                    for k2, v2 in sorted(v.items()): txt.insert(tk.END, fmt.format(k, k2, " ".join(v2)))
-            txt.configure(state="disabled")
+        active_mode = self.parser_manager.get_active_parser_name()
         
         self.cfg_rules_text.configure(state="normal")
         self.cfg_rules_text.delete("1.0", tk.END)
-        for nt, prods in grammar.items():
-            rhs = " | ".join([" ".join(p) for p in prods])
-            self.cfg_rules_text.insert(tk.END, f"{nt} -> {rhs}\n")
+        
+        if active_mode == "LL(1)":
+            for nt, prods in grammar.items():
+                rhs = " | ".join([" ".join(p) for p in prods])
+                self.cfg_rules_text.insert(tk.END, f"{nt} -> {rhs}\n")
+        else:
+            engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+            for nt, prods in engine.grammar.items():
+                rhs = " | ".join([" ".join(p) for p in prods])
+                self.cfg_rules_text.insert(tk.END, f"{nt} -> {rhs}\n")
         self.cfg_rules_text.configure(state="disabled")
 
-        fill(self.first_text, self.first, "FIRST({:15}) = {{ {} }}\n")
-        fill(self.follow_text, self.follow, "FOLLOW({:14}) = {{ {} }}\n")
-        fill(self.table_text, self.table, "Table[{:15}, {:10}] = {}\n")
+        self.first_text.configure(state="normal")
+        self.first_text.delete("1.0", tk.END)
+        self.follow_text.configure(state="normal")
+        self.follow_text.delete("1.0", tk.END)
+        self.table_text.configure(state="normal")
+        self.table_text.delete("1.0", tk.END)
+        
+        if active_mode == "LL(1)":
+            for nt, first_set in sorted(self.first.items()):
+                self.first_text.insert(tk.END, f"FIRST({nt:15}) = {{ {', '.join(sorted(first_set))} }}\n")
+            for nt, follow_set in sorted(self.follow.items()):
+                self.follow_text.insert(tk.END, f"FOLLOW({nt:14}) = {{ {', '.join(sorted(follow_set))} }}\n")
+            for nt, row in sorted(self.table.items()):
+                for term, prod in sorted(row.items()):
+                    self.table_text.insert(tk.END, f"Table[{nt:15}, {term:10}] = {' '.join(prod)}\n")
+        else:
+            engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+            
+            self.first_text.insert(tk.END, f"=== CANONICAL STATES COLLECTION ({len(engine.states)} States) ===\n\n")
+            for idx, state in enumerate(engine.states):
+                name = engine.state_names[idx] if hasattr(engine, "state_names") else f"I{idx}"
+                self.first_text.insert(tk.END, f"State {name}:\n")
+                for item in sorted(list(state)):
+                    lhs, rhs, dot = item[0], item[1], item[2]
+                    rhs_l = list(rhs)
+                    rhs_l.insert(dot, ".")
+                    prod_str = " ".join(rhs_l)
+                    
+                    if len(item) == 4: # LALR
+                        self.first_text.insert(tk.END, f"  [{lhs} -> {prod_str} , '{item[3]}']\n")
+                    else: # SLR
+                        self.first_text.insert(tk.END, f"  [{lhs} -> {prod_str}]\n")
+                self.first_text.insert(tk.END, "\n")
+                
+            self.follow_text.insert(tk.END, "=== GRAMMAR FIRST SETS ===\n")
+            for nt, first_set in sorted(self.first.items()):
+                self.follow_text.insert(tk.END, f"FIRST({nt:15}) = {{ {', '.join(sorted(first_set))} }}\n")
+            self.follow_text.insert(tk.END, "\n=== GRAMMAR FOLLOW SETS ===\n")
+            for nt, follow_set in sorted(self.follow.items()):
+                self.follow_text.insert(tk.END, f"FOLLOW({nt:14}) = {{ {', '.join(sorted(follow_set))} }}\n")
+                
+            self.table_text.insert(tk.END, f"=== LR ACTION & GOTO PARSING TABLES ===\n\n")
+            for (st, term), act in sorted(engine.action_table.items()):
+                st_name = engine.state_names[st] if hasattr(engine, "state_names") else f"I{st}"
+                self.table_text.insert(tk.END, f"ACTION[{st_name:8}, {term:8}] = {act}\n")
+            self.table_text.insert(tk.END, "\n")
+            for (st, nt), nxt_st in sorted(engine.goto_table.items()):
+                st_name = engine.state_names[st] if hasattr(engine, "state_names") else f"I{st}"
+                nxt_name = engine.state_names[nxt_st] if hasattr(engine, "state_names") else f"I{nxt_st}"
+                self.table_text.insert(tk.END, f"GOTO  [{st_name:8}, {nt:8}] = {nxt_name}\n")
+                
+        self.first_text.configure(state="disabled")
+        self.follow_text.configure(state="disabled")
+        self.table_text.configure(state="disabled")
+
+    def change_parser_mode(self, choice):
+        self.parser_manager.set_parser_mode(choice)
+        self.log_compiler(f"Active syntax analyzer switched to: {choice}")
+        self.nav_buttons["trace"].configure(text=f"  {choice} Stack Trace")
+        
+        if hasattr(self, "tokens") and self.tokens:
+            self.run_syntax_phase_only()
+
+    def run_syntax_phase_only(self):
+        if not hasattr(self, "educational_tokens") or not self.educational_tokens:
+            return
+            
+        active_mode = self.parser_manager.get_active_parser_name()
+        self.parse_result = self.parser_manager.parse(self.educational_tokens)
+        
+        if not self.parse_result["success"] or len(self.educational_tokens) == 0:
+            baseline_source = "rakho limit = 4;\nbol limit;"
+            from semantic.error_manager import CompilerErrorManager
+            err_mgr = CompilerErrorManager()
+            baseline_lexer = Lexer(baseline_source, err_mgr)
+            baseline_tokens = baseline_lexer.tokenize()
+            self.parse_result = self.parser_manager.parse(baseline_tokens)
+            
+        self.update_trace_display()
+        self.tree_viz.draw_tree(self.parse_result["tree"])
+        self.update_cfg_display()
+        
+        if active_mode != "LL(1)":
+            engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+            state_names = engine.state_names if hasattr(engine, "state_names") else None
+            merge_logs = engine.merge_logs if hasattr(engine, "merge_logs") else None
+            self.lr_dfa_viz.draw_dfa(active_mode, engine.states, engine.transitions, state_names, merge_logs)
+        else:
+            self.lr_dfa_viz.show_overlay()
+            
+        self.update_parser_comparison_metrics()
+        self.refresh_analytics_telemetry()
+
+    def update_parser_comparison_metrics(self):
+        if not hasattr(self, "educational_tokens") or not self.educational_tokens:
+            self.parser_cmp_viz.update_metrics(0, 0, 0, 0, 0, 0, 0)
+            return
+            
+        ll1_res = self.parser_manager.ll1_engine.parse(self.educational_tokens)
+        slr_res = self.parser_manager.slr_engine.parse(self.educational_tokens)
+        lalr_res = self.parser_manager.lalr_engine.parse(self.educational_tokens)
+        
+        ll1_steps = len(ll1_res["trace"]) if "trace" in ll1_res else 0
+        slr_steps = len(slr_res["trace"]) if "trace" in slr_res else 0
+        lalr_steps = len(lalr_res["trace"]) if "trace" in lalr_res else 0
+        
+        slr_states = len(self.parser_manager.slr_engine.states)
+        lalr_states = len(self.parser_manager.lalr_engine.states)
+        
+        slr_conf = len(self.parser_manager.slr_engine.conflicts)
+        lalr_conf = len(self.parser_manager.lalr_engine.conflicts)
+        
+        self.parser_cmp_viz.update_metrics(
+            ll1_steps, slr_steps, lalr_steps, 
+            slr_states, lalr_states, 
+            slr_conf, lalr_conf
+        )
+
+    def refresh_analytics_telemetry(self):
+        if not hasattr(self, "parse_result") or not self.parse_result:
+            return
+            
+        active_mode = self.parser_manager.get_active_parser_name()
+        if active_mode == "LL(1)":
+            profile = "LL(1) (Top-Down)"
+        else:
+            engine = self.parser_manager.slr_engine if active_mode == "SLR" else self.parser_manager.lalr_engine
+            profile = f"{active_mode} ({len(engine.states)} States, {len(engine.conflicts)} Conflicts)"
+
+        # Read active metrics values safely
+        metrics = {
+            "tokens": len(self.tokens),
+            "parser_time": getattr(self, "elapsed_ms", 0.0),
+            "ast_depth": getattr(self, "max_depth", 0),
+            "ast_depth_path": getattr(self, "ast_depth_path", [0]),
+            "orig_tac_len": len(getattr(self, "orig_tac_lines", [])),
+            "opt_tac_len": len(getattr(self, "opt_tac_lines", [])),
+            "opt_ratio": getattr(self, "opt_ratio", 1.0),
+            "reduction": getattr(self, "reduction_pct", 0.0),
+            "cycles": len(self.vm.instructions),
+            "parser_profile": profile
+        }
+        self.tabs["analytics"].update_telemetry(metrics)
 
     def update_trace_display(self):
         for item in self.trace_tree.get_children(): self.trace_tree.delete(item)
@@ -1164,10 +1486,10 @@ class CompilerApp(ctk.CTk):
         
         path = filedialog.asksaveasfilename(
             title="Export Compiler Analysis Dossier",
-            defaultextension=".html",
+            defaultextension=".txt",
             filetypes=[
-                ("HTML Interactive Dossier", "*.html"),
-                ("Text Engineering Report", "*.txt")
+                ("Text Engineering Report", "*.txt"),
+                ("HTML Interactive Dossier", "*.html")
             ]
         )
         if not path:

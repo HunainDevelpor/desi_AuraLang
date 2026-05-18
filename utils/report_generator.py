@@ -315,55 +315,82 @@ class CompilerReportGenerator:
 
     @staticmethod
     def generate_txt(data: Dict[str, Any]) -> str:
-        """Generates a plain-text dossier report representing the compiler stats."""
+        """Generates a plain-text dossier report representing the compiler stats in clean, easy-to-read ASCII formatting."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         source_code = data.get("source_code", "").strip()
         
-        tokens_str = ""
+        # 1. Format Lexical Tokens List in a beautiful ASCII grid table
+        tokens_str = f"+{'-'*6}+{'-'*22}+{'-'*22}+{'-'*25}+\n"
+        tokens_str += f"| {'No.':<4} | {'Token Type':<20} | {'Lexeme / Value':<20} | {'Location Coordinates':<23} |\n"
+        tokens_str += f"+{'-'*6}+{'-'*22}+{'-'*22}+{'-'*25}+\n"
         for i, t in enumerate(data.get("tokens", [])):
-            tokens_str += f"[{i+1:3}] {t.type.name:<15} | \"{t.value}\":<{15} | Line {t.line}, Col {t.col}\n"
+            val_escaped = str(t.value).replace("\n", "\\n")
+            tokens_str += f"| {i+1:<4} | {t.type.name:<20} | {val_escaped:<20} | Line {t.line:<4}, Col {t.col:<4} |\n"
+        tokens_str += f"+{'-'*6}+{'-'*22}+{'-'*22}+{'-'*25}+\n"
             
-        syms_str = ""
+        # 2. Format Scoped Symbol Table in a beautiful ASCII grid table
+        syms_str = f"+{'-'*18}+{'-'*15}+{'-'*15}+{'-'*15}+{'-'*18}+{'-'*12}+\n"
+        syms_str += f"| {'Identifier':<16} | {'Type Bind':<13} | {'Scope Depth':<13} | {'Assigned Value':<13} | {'Memory Offset':<16} | {'Source Line':<10} |\n"
+        syms_str += f"+{'-'*18}+{'-'*15}+{'-'*15}+{'-'*15}+{'-'*18}+{'-'*12}+\n"
         for s in data.get("symbols", []):
-            syms_str += f"- {s.name:<12} | Type: {s.datatype:<10} | Scope: {s.scope:<12} | Addr: {s.address:<6} | Line {s.line}\n"
+            val_str = str(s.value) if s.value is not None else "-"
+            syms_str += f"| {s.name:<16} | {s.datatype:<13} | {s.scope:<13} | {val_str:<13} | {s.address:<16} | Line {s.line:<8} |\n"
+        syms_str += f"+{'-'*18}+{'-'*15}+{'-'*15}+{'-'*15}+{'-'*18}+{'-'*12}+\n"
             
+        # 3. Format FIRST / FOLLOW sets
+        ff_str = f"+{'-'*25}+{'-'*30}+{'-'*30}+\n"
+        ff_str += f"| {'Non-Terminal':<23} | {'FIRST Set':<28} | {'FOLLOW Set':<28} |\n"
+        ff_str += f"+{'-'*25}+{'-'*30}+{'-'*30}+\n"
+        first = data.get("first", {})
+        follow = data.get("follow", {})
+        for nt in sorted(first.keys()):
+            first_set = "{" + ", ".join(sorted(first[nt])) + "}"
+            follow_set = "{" + ", ".join(sorted(follow.get(nt, set()))) + "}"
+            ff_str += f"| {nt:<23} | {first_set:<28} | {follow_set:<28} |\n"
+        ff_str += f"+{'-'*25}+{'-'*30}+{'-'*30}+\n"
+
         tac_code = "\n".join(data.get("tac_lines", []))
         asm_code = "\n".join(data.get("asm_lines", []))
         
         vm_outs = "\n".join([f"> {out}" for out in data.get("vm_console", [])])
         vm_logs = "\n".join(data.get("vm_logs", []))
 
-        text_report = f"""====================================================
+        text_report = f"""================================================================================
 DESI AURALANG COMPILER ANALYSIS DOSSIER
-====================================================
+================================================================================
 Generated on: {timestamp}
 
 [1. ORIGINAL SOURCE CODE]
-----------------------------------------------------
+--------------------------------------------------------------------------------
 {source_code}
 
-[2. LEXICAL TOKENS (PHASE 1)]
-----------------------------------------------------
+[2. LEXICAL TOKENS LIST (PHASE 1)]
+--------------------------------------------------------------------------------
 {tokens_str}
 
-[3. SCOPED SYMBOL TABLE (PHASE 4)]
-----------------------------------------------------
+[3. LL(1) GRAMMARSETS (PHASE 2)]
+--------------------------------------------------------------------------------
+{ff_str}
+
+[4. SCOPED SYMBOLS REGISTRY (PHASE 4)]
+--------------------------------------------------------------------------------
 {syms_str}
 
-[4. THREE ADDRESS INTERMEDIATE CODE (PHASE 5)]
-----------------------------------------------------
-{tac_code}
+[5. THREE ADDRESS INTERMEDIATE CODE (PHASE 5)]
+--------------------------------------------------------------------------------
+{tac_code if tac_code else "No TAC generated."}
 
-[5. TARGET ASSEMBLY STREAM (PHASE 6)]
-----------------------------------------------------
-{asm_code}
+[6. TARGET Stack VM virtual ASSEMBLY (PHASE 6)]
+--------------------------------------------------------------------------------
+{asm_code if asm_code else "No target assembly generated."}
 
-[6. VM RUNTIME OUTPUT CONSOLE]
-----------------------------------------------------
+[7. VM RUNTIME OUTPUT CONSOLE & telemetries]
+--------------------------------------------------------------------------------
+CONSOLE OUTPUTS:
 {vm_outs if vm_outs else "No output printed."}
 
-VM LOG TRACE:
-{vm_logs if vm_logs else "No vm execution trace."}
-====================================================
+VM STEP-DEBUG LOG TRACE:
+{vm_logs if vm_logs else "No simulation steps recorded."}
+================================================================================
 """
         return text_report

@@ -24,6 +24,7 @@ class AnalyticsDashboard(ctk.CTkFrame):
         self.card_ratio = self.create_gauge_card(self.gauges_frame, "Optimization Ratio", "1.00x", "#2ecc71")
         self.card_reduction = self.create_gauge_card(self.gauges_frame, "TAC Size Reduction", "0 %", "#e74c3c")
         self.card_cycles = self.create_gauge_card(self.gauges_frame, "VM Instructions Run", "0 cycles", "#1abc9c")
+        self.card_parser = self.create_gauge_card(self.gauges_frame, "Parser Active Profile", "LL(1) (Top-Down)", "#f1c40f")
         
         # Right Panel (Custom Canvas charts)
         self.chart_frame = ctk.CTkFrame(self, fg_color="#141414", corner_radius=15)
@@ -83,6 +84,9 @@ class AnalyticsDashboard(ctk.CTkFrame):
         
         cycles = metrics.get("cycles", 0)
         self.card_cycles["value_lbl"].configure(text=f"{cycles} instrs")
+        
+        parser_profile = metrics.get("parser_profile", "LL(1) (Top-Down)")
+        self.card_parser["value_lbl"].configure(text=str(parser_profile))
         
         # Redraw charts with active metrics
         self.draw_bar_chart(metrics.get("orig_tac_len", 0), metrics.get("opt_tac_len", 0))

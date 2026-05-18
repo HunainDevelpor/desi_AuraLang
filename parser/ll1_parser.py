@@ -24,8 +24,13 @@ class LL1Parser:
         # Convert lexer tokens to grammar terminals
         input_tokens = []
         for t in tokens_objs:
-            g_terminal = TERMINALS.get(t.type.name, t.value)
-            input_tokens.append((g_terminal, t.value)) # (terminal, literal)
+            # Map token type to grammar terminal string. If not in TERMINALS, fallback to name or value
+            g_terminal = TERMINALS.get(t.type.name)
+            if g_terminal is None:
+                g_terminal = str(t.value) if t.value is not None else t.type.name.lower()
+            
+            literal = str(t.value) if t.value is not None else g_terminal
+            input_tokens.append((g_terminal, literal)) # (terminal, literal)
         
         # Add EOF
         if not input_tokens or input_tokens[-1][0] != "$":
